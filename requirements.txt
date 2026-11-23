@@ -1,0 +1,3 @@
+# The eccodes wheel bundles the ecCodes binary (with CCSDS / libaec support) on Linux.
+eccodes==2.50.1
+numpy==2.5.5

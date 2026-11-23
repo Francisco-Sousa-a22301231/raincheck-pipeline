@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import random
 import threading
 import time
@@ -69,5 +70,8 @@ def request(
                 raise last from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as err:
             last = err
+        except http.client.HTTPException as err:
+            # The answer broke off half-way (IncompleteRead) or made no sense: as good as unreachable.
+            last = OSError(f"broken answer from {url}: {err!r}")
     assert last is not None
     raise last

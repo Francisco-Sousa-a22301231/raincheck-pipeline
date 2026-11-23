@@ -59,25 +59,33 @@ def parse_index(text: str, path: str, bases: tuple[str, ...], params: tuple[str,
     return out
 
 
+class SourceTrouble(OSError):
+    """No source could say whether a step exists (errors or no connection everywhere)."""
+
+
 def step_fields(
     run: int, step: int, sources: list[str] | None = None, ask_all: bool = True, params: tuple[str, ...] = PARAMS
 ) -> dict[str, Field] | None:
     """Where the needed fields of one step are, from the first source that has the step.
 
-    None when no source has it (not published yet, or already gone). A source that fails is reported
-    and the next one is asked. With `ask_all` off, the first source that answers "not there" settles it
-    (right for a run that may not be out yet; wrong for old runs, which the origin drops first).
+    None when a source answered "not there" (404) and no other has it: not published yet, or already
+    gone. A source that fails is reported and the next one is asked; when every source failed nobody
+    knows whether the step exists, and that raises SourceTrouble instead of passing for "not there"
+    (a step taken for gone is uploaded as empty hours). With `ask_all` off, the first source that
+    answers "not there" settles it (right for a run that may not be out yet; wrong for old runs, which
+    the origin drops first).
     """
     bases = sources or source_order()
+    said_no = False
     for base in bases:
-        said_no = False
+        missing = 0
         for stream in STREAMS:
             url = f"{base}/{file_path(run, step, stream, 'index')}"
             try:
                 _, body = request(url)
             except HttpError as err:
-                if err.status in (403, 404):
-                    said_no = True  # not there (S3 answers 403 or 404 for a missing key)
+                if err.status == 404:  # both the portal and the mirror answer 404 for a file they do not have
+                    missing += 1
                     continue
                 print(f"  warning: {base} answered HTTP {err.status} for step {step} of run {run_name(run)}", flush=True)
                 break  # this source is in trouble: ask the next one
@@ -86,8 +94,12 @@ def step_fields(
                 break
             order = (base, *[b for b in bases if b != base])
             return parse_index(body.decode("utf-8"), file_path(run, step, stream, "grib2"), order, params)
-        if said_no and not ask_all:
-            return None
+        if missing == len(STREAMS):
+            said_no = True
+            if not ask_all:
+                return None
+    if not said_no:
+        raise SourceTrouble(f"no source could be asked for step {step} of run {run_name(run)}")
     return None
 
 

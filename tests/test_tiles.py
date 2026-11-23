@@ -47,6 +47,18 @@ def test_source_of_past_and_future():
     assert all(tiles.source_of(RUN, t) in wanted for t in tiles.timeline(RUN))
 
 
+def test_holes_in_the_newest_run():
+    whole = {(RUN, s): set(tiles.PARAMS) for s in tiles.future_steps()}
+    assert tiles.holes(RUN, whole) == []
+    # Step 0 only gives the state: its accumulated fields are not needed.
+    assert tiles.holes(RUN, {**whole, (RUN, 0): set(tiles.STATE_PARAMS)}) == []
+    assert tiles.holes(RUN, {k: v for k, v in whole.items() if k != (RUN, 30)}) == ["step 30"]
+    assert tiles.holes(RUN, {**whole, (RUN, 72): set(tiles.PARAMS) - {"tp"}}) == ["step 72: tp"]
+    assert tiles.holes(RUN, {**whole, (RUN, 0): {"2t"}}) == ["step 0: 2d, 10u, 10v, tcc"]
+    # Earlier runs are not its business (their hours may be empty).
+    assert tiles.holes(RUN, {**whole, (RUN - 6 * HOUR, 3): set()}) == []
+
+
 def fake_get(missing_runs=(), analysis_temp=None):
     """Raw fields of an invented atmosphere: 1 mm of rain per hour of forecast, 10 °C, dew point 0 °C."""
 

@@ -22,6 +22,9 @@ TILE_VERSION = 1
 # GRIB short names of the seven fields.
 PARAMS = ("tp", "2t", "2d", "10u", "10v", "tcc", "ssrd")
 
+# The fields that are a state at the end of a step (the other two, tp and ssrd, add up from the run's start).
+STATE_PARAMS = ("2t", "2d", "10u", "10v", "tcc")
+
 # (run, step, param) -> value at one point, or None when that field is missing.
 Getter = Callable[[int, int, str], "float | None"]
 
@@ -47,6 +50,24 @@ def earlier_runs(run: int) -> list[int]:
 
 
 EARLIER_STEPS = (3, 6)
+
+
+def holes(run: int, have: dict[tuple[int, int], set[str]]) -> list[str]:
+    """What the newest run lacks, as text (empty when it is whole): a run with holes must not be uploaded.
+
+    `have[(run, step)]` is the set of fields that were read for that step. Every step from 0 to 72 h has
+    to be there with all seven fields; at step 0 the two accumulated ones are not used (they are zero).
+    """
+    out: list[str] = []
+    for step in future_steps():
+        fields = have.get((run, step))
+        if fields is None:
+            out.append(f"step {step}")
+            continue
+        lacking = [p for p in (STATE_PARAMS if step == 0 else PARAMS) if p not in fields]
+        if lacking:
+            out.append(f"step {step}: {', '.join(lacking)}")
+    return out
 
 
 def source_of(run: int, t: int) -> tuple[int, int]:

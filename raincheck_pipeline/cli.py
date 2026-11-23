@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import ecmwf, targets as tg
 from .http import counter
-from .tiles import EARLIER_STEPS, build_tiles, earlier_runs, encode, future_steps, point_series
+from .tiles import EARLIER_STEPS, build_tiles, earlier_runs, encode, future_steps, holes, point_series
 
 
 def log(message: str) -> None:
@@ -33,7 +33,10 @@ def set_output(name: str, value: str) -> None:
 
 
 def fetch_step(job: tuple[int, int]) -> tuple[tuple[int, int], dict[str, bytes] | None]:
-    """Downloads the seven fields of one (run, step); None when the step is not on any source."""
+    """Downloads the seven fields of one (run, step); None when the sources say the step is not there (404).
+
+    Raises when no source could be asked, or when a field cannot be downloaded.
+    """
     run, step = job
     fields = ecmwf.step_fields(run, step)
     if fields is None:
@@ -66,11 +69,11 @@ def extract(run: int, points: list[tuple[float, float]], threads: int):
                 gone.append(job)
                 continue
             values[job] = dict(sampler.sample(m) for m in messages.values())
-    lost_new = sorted(s for r, s in gone if r == run)
-    if lost_new:
-        raise RuntimeError(f"run {ecmwf.run_name(run)}: steps {lost_new} are missing on every source")
+    lacking = holes(run, {job: set(fields) for job, fields in values.items()})
+    if lacking:
+        raise RuntimeError(f"run {ecmwf.run_name(run)} is not whole on any source ({'; '.join(lacking)}): nothing is uploaded")
     for r in sorted({r for r, _ in gone}):
-        log(f"  earlier run {ecmwf.run_name(r)} is no longer served: its hours stay empty (null)")
+        log(f"  earlier run {ecmwf.run_name(r)} is no longer served (404): its hours stay empty (null)")
     return values, sampler
 
 
@@ -120,7 +123,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     # 2. The newest complete run (one or two small requests).
-    run = parse_run(args.run) if args.run else ecmwf.latest_run(int(time.time()))
+    try:
+        run = parse_run(args.run) if args.run else ecmwf.latest_run(int(time.time()))
+    except ecmwf.SourceTrouble as err:
+        log(f"ECMWF could not be asked: {err}")
+        return 1
     if run is None:
         log("no complete IFS run found on any source")
         return 1

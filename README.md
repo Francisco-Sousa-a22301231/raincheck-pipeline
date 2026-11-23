@@ -12,10 +12,13 @@ run rebuilds everything from ECMWF.
 
 1. **Newest run.** IFS runs four times a day (00, 06, 12, 18 UTC) and is published 7 to 9 hours later.
    The script looks for the newest run whose 72-hour step is out (one or two small requests).
-2. **Who needs it.** For each target it reads `GET <url>/api/cells` (the places) and
-   `GET <url>/api/admin/base/status` (the run the server holds). A target that already holds the run,
-   for the same list of places, is skipped. When no target needs anything the job ends there, in a
-   few seconds and without installing anything.
+2. **Who needs it.** For each target it reads `GET <url>/api/admin/base/status` (the run the server
+   holds: one small stored object, no database behind it). A target that holds an older run, or none,
+   gets the new one: only then is `GET <url>/api/cells` read (the places; the server reads every one of
+   them from its database for it). A target that already holds the run is left alone, unless the job
+   was started with `--cells`: then its list of places is compared too, and a changed list rebuilds the
+   same run. When no target needs anything the job ends there, in a few seconds and without installing
+   anything.
 3. **Download.** Seven surface fields per step: total precipitation `tp`, 2 m temperature `2t`, 2 m dew
    point `2d`, 10 m wind `10u` `10v`, total cloud cover `tcc`, surface solar radiation downwards
    `ssrd`; plus the land-sea mask `lsm` once. Each step file is about 100 MB; its `.index` file says
@@ -111,8 +114,9 @@ docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -c \
   "pip install -q -r requirements.txt && python -m raincheck_pipeline --dry-run --points-file points.example.json"
 ```
 
-Options: `--check` (only say whether there is work, no download), `--force` (upload even when the
-target holds the run), `--run YYYYMMDDHH` (a given run instead of the newest).
+Options: `--check` (only say whether there is work, no download), `--cells` (also compare the list of
+places of a target that already holds the run), `--force` (upload even when the target holds the run),
+`--run YYYYMMDDHH` (a given run instead of the newest).
 
 ## Settings (environment)
 
@@ -127,7 +131,8 @@ target holds the run), `--run YYYYMMDDHH` (a given run instead of the newest).
 
 On GitHub Actions (`.github/workflows/base-layer.yml`) the names are repository **variables**
 (`TARGETS`, `STAGING_URL`, `LIVE_URL`) and repository **secrets** (`STAGING_TOKEN`, `LIVE_TOKEN`). The
-workflow runs every 15 minutes and on demand ("Run workflow"), never two at once.
+workflow runs every 15 minutes and on demand ("Run workflow"), never two at once. Three checks an hour
+only ask for a new run; the fourth (and a manual run) passes `--cells`.
 
 GitHub turns scheduled workflows off in a public repository after 60 days without any activity in it
 (a commit is enough to keep them on, and GitHub sends an e-mail before). Nothing here works around
@@ -144,8 +149,9 @@ that.
 - **Earlier runs:** the ECMWF portal keeps the most recent 12 runs or so (the oldest one needed is right
   at that edge), the AWS mirror keeps all of them.
   When neither serves an earlier run its hours are `null`; a missing step of the new run fails the job.
-- **New places** appear at the next job after the server lists them (their list has a fingerprint: a
-  change rebuilds the tiles even for the same run).
+- **New places** appear within the hour or so after the server lists them (their list has a
+  fingerprint, compared once an hour: a change rebuilds the tiles even for the same run), and at the
+  next run in any case.
 
 ## Data source and licence
 

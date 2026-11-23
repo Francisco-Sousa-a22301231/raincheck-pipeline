@@ -1,11 +1,17 @@
 name: Base layer
 
 # Every 15 minutes: is there a new ECMWF run that a target does not hold yet? Almost always there is not,
-# and the job ends after the check (standard library only, no install). Four times a day there is: then
+# and the job ends after the check (standard library only, no install): a few small requests to ECMWF and
+# one to each target's status, which costs the target no database read. Four times a day there is: then
 # Python and the GRIB decoder are installed (pip cache) and the tiles are built and uploaded.
+# Once an hour the check also compares each target's list of places (a new place gets its tiles without
+# waiting for the next run); the target reads every place from its database for that, so not more often.
 on:
   schedule:
-    - cron: "4,19,34,49 * * * *" # off the hour marks, where GitHub delays scheduled jobs the most
+    # Off the hour marks, where GitHub delays scheduled jobs the most. Two entries so the job can tell
+    # which one started it (github.event.schedule): the second is the hourly one with the list of places.
+    - cron: "19,34,49 * * * *"
+    - cron: "4 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -34,6 +40,8 @@ jobs:
       STAGING_TOKEN: ${{ secrets.STAGING_TOKEN }}
       LIVE_TOKEN: ${{ secrets.LIVE_TOKEN }}
       FORCE: ${{ inputs.force && '--force' || '' }}
+      # Compare the list of places too: on the hourly trigger and on a manual run.
+      CELLS: ${{ (github.event_name != 'schedule' || github.event.schedule == '4 * * * *') && '--cells' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,7 +49,7 @@ jobs:
 
       - name: Is there a new run for any target?
         id: check
-        run: python3 -m raincheck_pipeline --check $FORCE
+        run: python3 -m raincheck_pipeline --check $FORCE $CELLS
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: steps.check.outputs.needed == 'true'
@@ -56,4 +64,4 @@ jobs:
 
       - name: Build and upload the tiles
         if: steps.check.outputs.needed == 'true'
-        run: python -m raincheck_pipeline $FORCE
+        run: python -m raincheck_pipeline $FORCE $CELLS

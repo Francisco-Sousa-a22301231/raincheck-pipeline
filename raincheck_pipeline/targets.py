@@ -110,6 +110,20 @@ def get_status(target: Target) -> dict:
     return status if isinstance(status, dict) else {}
 
 
+def first_look(status: dict, run: int) -> str:
+    """What the status alone says about `run`, before anyone asks for the list of points.
+
+    "older": the server holds an older run or none, so it needs this one whatever its points are;
+    "same": it holds this run, and only a changed list of points could give work; "newer": it holds a
+    newer one (never go back). The status costs the server one small stored object; its list of points
+    costs it a database read of every place, so that is only asked for when this says it is worth it.
+    """
+    stored = status.get("run")
+    if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+        return "older"
+    return "older" if stored < run else "same" if stored == run else "newer"
+
+
 def needs(status: dict, run: int, signature: str) -> bool:
     """True when the server should get this run: it holds an older one, or its list of points changed."""
     stored = status.get("run")

@@ -96,6 +96,9 @@ def series_for(run: int, cells: list[dict], values: dict, where: dict[tuple[floa
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="raincheck_pipeline", description=__doc__)
     ap.add_argument("--check", action="store_true", help="only say whether any target needs the newest run (no download)")
+    ap.add_argument("--cells", action="store_true",
+                    help="also compare the list of points of a target that already holds the run (the server reads "
+                         "all its places for that: not for every check)")
     ap.add_argument("--dry-run", action="store_true", help="no server involved: points from --points-file, tiles written to --out")
     ap.add_argument("--points-file", help='JSON list of {"id", "lat", "lon"} (dry run)')
     ap.add_argument("--out", default="out", help="folder for the dry run's tiles (default: out)")
@@ -141,28 +144,44 @@ def main(argv: list[str] | None = None) -> int:
         if dropped:
             log(f"{dropped} point(s) in {args.points_file} were not usable and are left out")
         work.append((None, cells, tg.cells_signature(cells)))
+    wanted: list[str] = []  # --check: targets that need the run whatever their points are
     for target in usable:
+        cells: list[dict] | None = None
         try:
-            cells = tg.get_cells(target.url)
-            signature = tg.cells_signature(cells)
+            # The status first: it costs the server nothing. Its list of points (a database read of
+            # every place) is only asked for when there is a run to build for it, or with --cells.
             status = tg.get_status(target)
+            look = tg.first_look(status, run)
+            held = f"holds run {status.get('run')}"
+            if args.check and (args.force or look == "older"):
+                log(f"target {target.name}: needs the run ({held if look == 'older' else 'forced'})")
+                wanted.append(target.name)
+                continue
+            if args.force or look == "older" or (look == "same" and args.cells):
+                cells = tg.get_cells(target.url)
+                signature = tg.cells_signature(cells)
         except Exception as err:  # one target down must not stop the others
             log(f"target {target.name}: could not be asked ({err})")
             failed = True
             continue
-        if args.force or tg.needs(status, run, signature):
-            held = status.get("run")
-            why = "forced" if args.force and not tg.needs(status, run, signature) else (
-                "its list of points changed" if held == run else f"holds run {held}")
+        if cells is None:
+            note = "holds a newer run" if look == "newer" else "holds the run; its list of points is only compared with --cells"
+            log(f"target {target.name}: up to date ({note})")
+        elif look == "older" or tg.needs(status, run, signature):
+            why = held if look == "older" else "its list of points changed"
             log(f"target {target.name}: needs the run ({len(cells)} points; {why})")
             work.append((target, cells, signature))
+        elif args.force:
+            log(f"target {target.name}: gets the run again ({len(cells)} points; forced)")
+            work.append((target, cells, signature))
         else:
-            log(f"target {target.name}: up to date")
+            log(f"target {target.name}: up to date (same run, same list of points)")
 
     if args.check:
-        set_output("needed", "true" if work else "false")
-        log("work to do" if work else "nothing to do")
-        return 1 if failed and not work else 0
+        needed = bool(work or wanted)
+        set_output("needed", "true" if needed else "false")
+        log("work to do" if needed else "nothing to do")
+        return 1 if failed and not needed else 0
     if not work:
         log("nothing to do")
         return 1 if failed else 0

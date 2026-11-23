@@ -52,6 +52,15 @@ def test_needs():
     assert not targets.needs({"run": 110, "cells": "y"}, 100, "x")  # never back to an older run
 
 
+def test_first_look_at_the_status():
+    assert targets.first_look({}, 100) == "older"
+    assert targets.first_look({"run": None}, 100) == "older"
+    assert targets.first_look({"run": 90, "cells": "x"}, 100) == "older"
+    assert targets.first_look({"run": 100}, 100) == "same"
+    assert targets.first_look({"run": 110}, 100) == "newer"
+    assert targets.first_look({"run": True}, 100) == "older"  # not a time
+
+
 def test_parse_index_and_paths():
     run = 1795392000  # 2026-11-23 00 UTC
     path = ecmwf.file_path(run, 6, "oper", "grib2")

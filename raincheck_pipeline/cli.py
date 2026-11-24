@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 wanted.append(target.name)
                 continue
             if args.force or look == "older" or (look == "same" and args.cells):
-                cells = tg.get_cells(target.url)
+                cells = tg.get_cells(target)
                 signature = tg.cells_signature(cells)
         except Exception as err:  # one target down must not stop the others
             log(f"target {target.name}: could not be asked ({err})")

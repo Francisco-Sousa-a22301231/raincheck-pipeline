@@ -14,8 +14,8 @@ run rebuilds everything from ECMWF.
    The script looks for the newest run whose 72-hour step is out (one or two small requests).
 2. **Who needs it.** For each target it reads `GET <url>/api/admin/base/status` (the run the server
    holds: one small stored object, no database behind it). A target that holds an older run, or none,
-   gets the new one: only then is `GET <url>/api/cells` read (the places; the server reads every one of
-   them from its database for it). A target that already holds the run is left alone, unless the job
+   gets the new one: only then is `GET <url>/api/cells` read (the places, with the same token; the server
+   reads every one of them from its database for it). A target that already holds the run is left alone, unless the job
    was started with `--cells`: then its list of places is compared too, and a changed list rebuilds the
    same run. When no target needs anything the job ends there, in a few seconds and without installing
    anything.
@@ -124,7 +124,7 @@ places of a target that already holds the run), `--force` (upload even when the 
 |---|---|
 | `TARGETS` | Comma-separated names of the servers to feed, for example `STAGING,LIVE`. |
 | `<NAME>_URL` | Address of the server, for example `https://staging.example.org`. Must be https (plain http only for localhost). |
-| `<NAME>_TOKEN` | The server's pipeline token (sent as `Authorization: Bearer`). A target without it is skipped with a message. |
+| `<NAME>_TOKEN` | The server's pipeline token (sent as `Authorization: Bearer` with all three requests: status, places, upload). A target without it is skipped with a message. |
 | `ECMWF_SOURCES` | Where to download from, in order. Default `ecmwf,aws`: ECMWF's portal, then the AWS mirror (which also keeps older runs). |
 | `DOWNLOAD_THREADS` | Parallel downloads, default 8. |
 | `BATCH_TILES`, `BATCH_BYTES` | Upload batch limits, default 300 tiles and 524288 bytes. |

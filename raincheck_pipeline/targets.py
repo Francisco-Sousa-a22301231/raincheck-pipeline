@@ -91,11 +91,16 @@ def cells_signature(cells: list[dict]) -> str:
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
-def get_cells(url: str) -> list[dict]:
-    _, body = request(f"{url}/api/cells", user_agent=USER_AGENT, headers={"Accept": "application/json"})
+def get_cells(target: Target) -> list[dict]:
+    """The server's list of points (it reads all its places for this: ask only when there is a use for it)."""
+    _, body = request(
+        f"{target.url}/api/cells",
+        user_agent=USER_AGENT,
+        headers={"Authorization": f"Bearer {target.token}", "Accept": "application/json"},
+    )
     cells, dropped = valid_cells(json.loads(body))
     if dropped:
-        print(f"  {dropped} point(s) from {url}/api/cells were not usable and are left out", flush=True)
+        print(f"  {dropped} point(s) from {target.url}/api/cells were not usable and are left out", flush=True)
     return cells
 
 

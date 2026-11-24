@@ -176,7 +176,7 @@ def encode(obj: object) -> bytes:
     return json.dumps(obj, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
-def batches(tiles: dict[str, dict], max_tiles: int = 300, max_bytes: int = 512 * 1024) -> Iterator[dict[str, dict]]:
+def batches(tiles: dict[str, dict], max_tiles: int = 60, max_bytes: int = 128 * 1024) -> Iterator[dict[str, dict]]:
     """Splits the tiles into upload batches: at most `max_tiles` each and about `max_bytes` of JSON.
 
     A single tile bigger than `max_bytes` still goes out, alone. Keys keep a stable (sorted) order.

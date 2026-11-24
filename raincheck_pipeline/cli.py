@@ -108,8 +108,10 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.monotonic()
     threads = int(os.environ.get("DOWNLOAD_THREADS", "8"))
-    max_tiles = min(300, int(os.environ.get("BATCH_TILES", "300")))
-    max_bytes = int(os.environ.get("BATCH_BYTES", str(512 * 1024)))
+    # Small batches: the server (Workers Free) has about 10 ms of processor time per request, and parsing,
+    # checking and storing 300 tiles (0.6 MB) took 6.4 ms on a fast desktop. 60 tiles is about 1.3 ms there.
+    max_tiles = min(300, int(os.environ.get("BATCH_TILES", "60")))
+    max_bytes = int(os.environ.get("BATCH_BYTES", str(128 * 1024)))
 
     if args.dry_run and not args.points_file:
         ap.error("--dry-run needs --points-file")

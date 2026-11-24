@@ -37,8 +37,8 @@ run rebuilds everything from ECMWF.
 5. **Numbers.** Accumulated fields (`tp`, `ssrd`) become amounts per 3-hour step; relative humidity
    comes from temperature and dew point; wind speed from `u` and `v`; `et0` from FAO-56
    Penman-Monteith (below).
-6. **Upload.** Tiles go to `PUT <url>/api/admin/base` in batches (at most 300 tiles and about 512 KB
-   each), with retries. Any answer that is not 2xx fails the job. The last batch is marked, and only
+6. **Upload.** Tiles go to `PUT <url>/api/admin/base` in batches (at most 60 tiles and about 128 KB
+   each: the server has little processor time per request), with retries. Any answer that is not 2xx fails the job. The last batch is marked, and only
    then does the server record the run as held: a run that broke half-way is done again next time.
 
 ## Tile format
@@ -127,7 +127,7 @@ places of a target that already holds the run), `--force` (upload even when the 
 | `<NAME>_TOKEN` | The server's pipeline token (sent as `Authorization: Bearer` with all three requests: status, places, upload). A target without it is skipped with a message. |
 | `ECMWF_SOURCES` | Where to download from, in order. Default `ecmwf,aws`: ECMWF's portal, then the AWS mirror (which also keeps older runs). |
 | `DOWNLOAD_THREADS` | Parallel downloads, default 8. |
-| `BATCH_TILES`, `BATCH_BYTES` | Upload batch limits, default 300 tiles and 524288 bytes. |
+| `BATCH_TILES`, `BATCH_BYTES` | Upload batch limits, default 60 tiles and 131072 bytes (the server takes at most 300 tiles and 1 MB). |
 
 On GitHub Actions (`.github/workflows/base-layer.yml`) the names are repository **variables**
 (`TARGETS`, `STAGING_URL`, `LIVE_URL`) and repository **secrets** (`STAGING_TOKEN`, `LIVE_TOKEN`). The

@@ -125,7 +125,7 @@ places of a target that already holds the run), `--force` (upload even when the 
 | `TARGETS` | Comma-separated names of the servers to feed, for example `STAGING,LIVE`. |
 | `<NAME>_URL` | Address of the server, for example `https://staging.example.org`. Must be https (plain http only for localhost). |
 | `<NAME>_TOKEN` | The server's pipeline token (sent as `Authorization: Bearer` with all three requests: status, places, upload). A target without it is skipped with a message. |
-| `ECMWF_SOURCES` | Where to download from, in order. Default `ecmwf,aws`: ECMWF's portal, then the AWS mirror (which also keeps older runs). |
+| `ECMWF_SOURCES` | Where to download from, in order. Default `ecmwf,aws,gcs`: ECMWF's portal, then its mirrors at AWS and Google Cloud (which also keep older runs). Names from that list, or base URLs. |
 | `DOWNLOAD_THREADS` | Parallel downloads, default 8. |
 | `BATCH_TILES`, `BATCH_BYTES` | Upload batch limits, default 60 tiles and 131072 bytes (the server takes at most 300 tiles and 1 MB). |
 
@@ -146,9 +146,11 @@ that.
 - **Delay:** a run is out 7 to 9 hours after its time, the job notices within 15 minutes or so (GitHub
   starts scheduled jobs late when it is busy), so tiles are 7 to 15 hours behind the atmosphere.
 - **The past is forecast, not measurement:** the 3 to 6 hour forecasts of earlier runs.
-- **Earlier runs:** the ECMWF portal keeps the most recent 12 runs or so (the oldest one needed is right
-  at that edge), the AWS mirror keeps all of them.
-  When neither serves an earlier run its hours are `null`; a missing step of the new run fails the job.
+- **Earlier runs:** the ECMWF portal keeps the last four dates only, so the oldest run an 18 UTC run
+  needs (72 h back) always comes from a mirror (AWS, then Google Cloud; both keep every run, and the AWS
+  one often answers "SlowDown"). When every source says an earlier run is not there (404) its hours are
+  `null`. When a source cannot be asked, a field cannot be downloaded, or a step or field of the new
+  run is missing, the job fails and nothing is uploaded: the next job tries again.
 - **New places** appear within the hour or so after the server lists them (their list has a
   fingerprint, compared once an hour: a change rebuilds the tiles even for the same run), and at the
   next run in any case.
@@ -157,10 +159,11 @@ that.
 
 Weather data: **ECMWF open data**, IFS high-resolution forecast at 0.25°
 (<https://www.ecmwf.int/en/forecasts/datasets/open-data>), read from <https://data.ecmwf.int/forecasts/>
-and from its mirror on AWS (`s3://ecmwf-forecasts`). It is published under the Creative Commons
-Attribution 4.0 International licence (CC BY 4.0, <https://creativecommons.org/licenses/by/4.0/>).
-The tiles are derived from it (sampled at places, turned into other units and quantities).
-The portal allows a limited number of connections at once; this job uses 8.
+and from its mirrors on AWS (`s3://ecmwf-forecasts`) and Google Cloud (`gs://ecmwf-open-data`). It is
+published under the Creative Commons Attribution 4.0 International licence (CC BY 4.0,
+<https://creativecommons.org/licenses/by/4.0/>). The tiles are derived from it (sampled at places,
+turned into other units and quantities). The portal allows a limited number of connections at once; this
+job uses 8.
 
 > Copyright © 2026 European Centre for Medium-Range Weather Forecasts (ECMWF). Source: www.ecmwf.int.
 > This data is published under a Creative Commons Attribution 4.0 International (CC BY 4.0).

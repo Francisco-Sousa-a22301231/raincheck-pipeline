@@ -1,6 +1,6 @@
 """ECMWF open data (IFS, 0.25 degrees): finding the newest run and downloading single fields.
 
-Layout (the same on the ECMWF portal and on the AWS mirror):
+Layout (the same on the ECMWF portal and on its mirrors at AWS and Google Cloud):
   <base>/<YYYYMMDD>/<HH>z/ifs/0p25/<stream>/<YYYYMMDDHH>0000-<step>h-<stream>-fc.grib2  (about 100 MB)
   and the same name ending in .index: one JSON line per field with its `_offset` and `_length`.
 Only the fields we need are fetched, with HTTP range requests. Standard library only.
@@ -16,10 +16,15 @@ from datetime import datetime, timezone
 from .http import HttpError, request
 from .tiles import HOUR, PARAMS, RUN_EVERY_H, SPAN_H
 
+# The portal only keeps the last four dates: the oldest run an 18 UTC run needs (72 h back, read after
+# midnight) is already gone from it and always comes from a mirror. The AWS bucket often answers
+# 503 "SlowDown", hence a second mirror.
 SOURCES = {
     "ecmwf": "https://data.ecmwf.int/forecasts",
     "aws": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com",
+    "gcs": "https://storage.googleapis.com/ecmwf-open-data",
 }
+DEFAULT_SOURCES = "ecmwf,aws,gcs"
 # All four daily runs are in `oper` today; the 06 and 18 UTC runs used to be in `scda`.
 STREAMS = ("oper", "scda")
 # How far back to look for a complete run before giving up (a run is out 7 to 9 hours after its time).
@@ -27,8 +32,8 @@ LOOK_BACK_H = 48
 
 
 def source_order() -> list[str]:
-    """Base URLs to try, in order (`ECMWF_SOURCES`, default "ecmwf,aws": names from SOURCES or URLs)."""
-    names = [s.strip() for s in os.environ.get("ECMWF_SOURCES", "ecmwf,aws").split(",") if s.strip()]
+    """Base URLs to try, in order (`ECMWF_SOURCES`, default "ecmwf,aws,gcs": names from SOURCES or URLs)."""
+    names = [s.strip() for s in (os.environ.get("ECMWF_SOURCES") or DEFAULT_SOURCES).split(",") if s.strip()]
     return [SOURCES.get(n, n).rstrip("/") for n in names]
 
 

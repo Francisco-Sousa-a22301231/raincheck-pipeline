@@ -80,3 +80,30 @@ def test_latest_run_with_nobody_answering_raises(monkeypatch):
     with pytest.raises(ecmwf.SourceTrouble):
         ecmwf.latest_run(RUN + 3600, BASES)
     assert len(asked) == 2  # gives up at the first run instead of walking back 48 hours
+
+
+def test_default_sources_are_the_portal_and_two_mirrors(monkeypatch):
+    monkeypatch.delenv("ECMWF_SOURCES", raising=False)
+    assert ecmwf.source_order() == [ecmwf.SOURCES["ecmwf"], ecmwf.SOURCES["aws"], ecmwf.SOURCES["gcs"]]
+    monkeypatch.setenv("ECMWF_SOURCES", "gcs, https://mirror.example/data/")
+    assert ecmwf.source_order() == [ecmwf.SOURCES["gcs"], "https://mirror.example/data"]
+
+
+def test_download_moves_on_to_the_next_source(monkeypatch):
+    message = b"GRIB" + b"x" * 12 + b"7777"
+    asked = []
+
+    def request(url, **kwargs):
+        asked.append(url.split("/")[2])
+        if "throttled" in url:
+            raise HttpError(503, url, "SlowDown")
+        if "gone" in url:
+            raise HttpError(404, url)
+        return 206, message
+
+    monkeypatch.setattr(ecmwf, "request", request)
+    field = ecmwf.Field("tp", "a/b.grib2", ("https://throttled", "https://gone", "https://fine"), 0, len(message))
+    assert ecmwf.download(field) == message
+    assert asked == ["throttled", "gone", "fine"]
+    with pytest.raises(HttpError):
+        ecmwf.download(ecmwf.Field("tp", "a/b.grib2", ("https://throttled", "https://gone"), 0, len(message)))

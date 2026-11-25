@@ -11,9 +11,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import ecmwf, targets as tg
+from . import ecmwf, ens, targets as tg
 from .http import counter
-from .tiles import EARLIER_STEPS, build_tiles, earlier_runs, encode, future_steps, holes, point_series
+from .tiles import (EARLIER_STEPS, HOUR, RUN_EVERY_H, SPAN_H, build_tiles, chance_on_timeline, earlier_runs, encode,
+                    future_steps, holes, point_series)
 
 
 def log(message: str) -> None:
@@ -30,6 +31,32 @@ def set_output(name: str, value: str) -> None:
     if path:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"{name}={value}\n")
+
+
+def newest_run(now: int, with_ens: bool = True) -> tuple[int | None, bool]:
+    """(the newest run to build, whether its ENS rain chance is out); (None, False) when no run is complete.
+
+    A run is complete when its HRES 72 h step has every field (ecmwf.latest_run's rule). Its ENS comes out
+    minutes later: until ens.WAIT_H hours after the run's time a complete run without its ENS is passed
+    over for the run before it (which a target normally holds already: nothing to do, the next check
+    tries again); after that it is built without the rain chance. Raises ecmwf.SourceTrouble like
+    latest_run when ECMWF cannot be asked about HRES.
+    """
+    newest = now - now % (RUN_EVERY_H * HOUR)
+    for back in range(0, ecmwf.LOOK_BACK_H + 1, RUN_EVERY_H):
+        run = newest - back * HOUR
+        fields = ecmwf.step_fields(run, SPAN_H, ask_all=False)
+        if fields is None or not all(p in fields for p in ecmwf.PARAMS):
+            continue
+        if not with_ens:
+            return run, False
+        if ens.is_out(run):
+            return run, True
+        if now - run >= ens.WAIT_H * HOUR:
+            log(f"run {ecmwf.run_name(run)}: no ENS {ens.WAIT_H} h after the run: built without the rain chance")
+            return run, False
+        log(f"run {ecmwf.run_name(run)}: HRES is out, its ENS not yet: waiting for it (at most {ens.WAIT_H} h after the run)")
+    return None, False
 
 
 def fetch_step(job: tuple[int, int]) -> tuple[tuple[int, int], dict[str, bytes] | None]:
@@ -77,8 +104,40 @@ def extract(run: int, points: list[tuple[float, float]], threads: int):
     return values, sampler
 
 
-def series_for(run: int, cells: list[dict], values: dict, where: dict[tuple[float, float], int], cloud_scale: float) -> list[dict]:
+def extract_ens(run: int, sampler, threads: int):
+    """The ENS rain chance of the run: float array [len(ens.steps()), points] (%, NaN: not known).
+
+    Downloads in threads, samples here, one field at a time (about 12 ms each). Raises when a step or a
+    member cannot be read; the caller then leaves the chance out rather than failing the run.
+    """
+    import numpy as np
+
+    steps = ens.steps()
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        found = dict(zip(steps, pool.map(lambda s: ens.step_members(run, s), steps)))
+    for s, fields in found.items():
+        if not fields or len(fields) < ens.MIN_MEMBERS:
+            raise RuntimeError(f"ENS step {s}: {len(fields or [])} members on the sources")
+    names = sorted({f.param for fields in found.values() for f in fields})
+    row = {name: k for k, name in enumerate(names)}
+    acc = [np.full((len(names), sampler.size), np.nan, dtype=np.float32) for _ in steps]
+    at = {s: k for k, s in enumerate(steps)}
+
+    def fetch(job):
+        step, field = job
+        return step, field.param, ecmwf.download(field)
+
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        for step, name, message in pool.map(fetch, [(s, f) for s in steps for f in found[s]]):
+            acc[at[step]][row[name]] = sampler.sample(message)[1]
+    return ens.chance(acc)
+
+
+def series_for(run: int, cells: list[dict], values: dict, where: dict[tuple[float, float], int], cloud_scale: float,
+               chance=None) -> list[dict]:
+    """The tile series of every cell; with `chance` (extract_ens) each also gets `p`, the ENS rain chance."""
     out = []
+    steps = ens.steps()
     for cell in cells:
         i = where[(cell["lat"], cell["lon"])]
 
@@ -89,7 +148,10 @@ def series_for(run: int, cells: list[dict], values: dict, where: dict[tuple[floa
             v = float(column[i])
             return None if v != v else v  # NaN: no value there
 
-        out.append(point_series(run, cell["lat"], cell["lon"], get, cloud_scale))
+        series = point_series(run, cell["lat"], cell["lon"], get, cloud_scale)
+        if chance is not None:
+            series["p"] = chance_on_timeline(run, {s: float(chance[k][i]) for k, s in enumerate(steps)})
+        out.append(series)
     return out
 
 
@@ -104,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="out", help="folder for the dry run's tiles (default: out)")
     ap.add_argument("--run", help="use this run (YYYYMMDDHH, UTC) instead of the newest complete one")
     ap.add_argument("--force", action="store_true", help="upload even to a target that already holds the run")
+    ap.add_argument("--no-ens", action="store_true", help="leave the ENS rain chance out (no wait for it, no download)")
     args = ap.parse_args(argv)
 
     started = time.monotonic()
@@ -129,14 +192,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # 2. The newest complete run (one or two small requests).
     try:
-        run = parse_run(args.run) if args.run else ecmwf.latest_run(int(time.time()))
+        if args.run:
+            run = parse_run(args.run)
+            with_ens = not args.no_ens and ens.is_out(run)
+        else:
+            run, with_ens = newest_run(int(time.time()), with_ens=not args.no_ens)
     except ecmwf.SourceTrouble as err:
         log(f"ECMWF could not be asked: {err}")
         return 1
     if run is None:
         log("no complete IFS run found on any source")
         return 1
-    log(f"newest complete run: {ecmwf.run_name(run)} ({run})")
+    log(f"newest complete run: {ecmwf.run_name(run)} ({run})" + ("" if with_ens else ", without the ENS rain chance"))
 
     # 3. Who needs it, and for which points.
     work: list[tuple[tg.Target | None, list[dict], str]] = []
@@ -193,12 +260,21 @@ def main(argv: list[str] | None = None) -> int:
     where = {p: i for i, p in enumerate(points)}
     values: dict = {}
     cloud_scale = 1.0
+    chance = None
     if points:
         values, sampler = extract(run, points, threads)
         cloud_scale = sampler.cloud_scale or 1.0
         fields = sum(len(v) for v in values.values())
         log(f"sampled {fields} fields of {len(values)} steps at {len(points)} points "
             f"({counter.bytes / 1e6:.1f} MB in {counter.requests} requests, {time.monotonic() - started:.0f} s)")
+        if with_ens:
+            b0, r0, t0 = counter.bytes, counter.requests, time.monotonic()
+            try:
+                chance = extract_ens(run, sampler, threads)
+                log(f"ENS rain chance: {len(ens.steps())} steps ({(counter.bytes - b0) / 1e6:.1f} MB in "
+                    f"{counter.requests - r0} requests, {time.monotonic() - t0:.0f} s)")
+            except Exception as err:  # the base layer without the chance is better than none
+                log(f"  warning: ENS rain chance left out ({err})")
         if args.dry_run and sampler.grid:
             from .grib import point_of
 
@@ -209,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     # 5. Tiles, per target.
     made = int(time.time())
     for target, cells, signature in work:
-        tiles = build_tiles(cells, series_for(run, cells, values, where, cloud_scale), run, made)
+        tiles = build_tiles(cells, series_for(run, cells, values, where, cloud_scale, chance), run, made)
         size = sum(len(encode(t)) for t in tiles.values())
         if target is None:
             out = Path(args.out)

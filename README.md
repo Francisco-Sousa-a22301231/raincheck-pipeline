@@ -11,7 +11,10 @@ run rebuilds everything from ECMWF.
 ## How it works
 
 1. **Newest run.** IFS runs four times a day (00, 06, 12, 18 UTC) and is published 7 to 9 hours later.
-   The script looks for the newest run whose 72-hour step is out (one or two small requests).
+   The script looks for the newest run whose 72-hour step is out (one or two small requests), and
+   whose ENS (below) is out too: the ENS comes a few minutes after HRES, so until 10 hours after the
+   run's time a run without it waits (the run before is taken, which the targets normally hold already);
+   after that it is built without the rain chance.
 2. **Who needs it.** For each target it reads `GET <url>/api/admin/base/status` (the run the server
    holds: one small stored object, no database behind it). A target that holds an older run, or none,
    gets the new one: only then is `GET <url>/api/cells` read (the places, with the same token; the server
@@ -29,6 +32,12 @@ run rebuilds everything from ECMWF.
      freshest forecast of every hour.
 
    That is 49 steps, about 165 MB and 400 requests per run, whatever the number of places.
+
+   **Rain chance (ENS).** Then the ensemble of the same run (`ifs/0p25/enfo`, 50 perturbed members, same
+   0.25° grid): each member's `tp` for steps 3 to 72 h, one range request each (about 0.45 MB; a step
+   file is about 4.5 GB). About 550 MB and 1,224 requests more per run (measured 25/11/2026: 552 MB),
+   whatever the number of places. When it cannot be read whole, the tiles go out without `p` (below) and
+   the job does not fail.
 4. **Sampling.** No interpolation: each place reads one grid point of the 0.25° grid, the nearest
    **land** point of the four around it (land = `lsm` ≥ 0.5), or the plain nearest point when none of
    the four is land. On a coast the plain nearest point is often sea, where the model has about twice
@@ -36,7 +45,10 @@ run rebuilds everything from ECMWF.
    11 km/h Open-Meteo gives for the same model.
 5. **Numbers.** Accumulated fields (`tp`, `ssrd`) become amounts per 3-hour step; relative humidity
    comes from temperature and dew point; wind speed from `u` and `v`; `et0` from FAO-56
-   Penman-Monteith (below).
+   Penman-Monteith (below). The rain chance `p` of a step is the share of the members with at least
+   0.3 mm in it (0.1 mm an hour, the bar Open-Meteo uses for its `precipitation_probability`; at 12 wet
+   places on 25/11/2026 this read 2.9 points under Open-Meteo's own ECMWF chance, 8.8 points apart on
+   average), rounded to whole %; a step with fewer than 40 members read has none.
 6. **Upload.** Tiles go to `PUT <url>/api/admin/base` in batches (at most 60 tiles and about 128 KB
    each: the server has little processor time per request), with retries. Any answer that is not 2xx fails the job. The last batch is marked, and only
    then does the server record the run as held: a run that broke half-way is done again next time.
@@ -49,7 +61,7 @@ One tile per 1° square, named `<floor(lat)>_<floor(lon)>` (Cascais, 38.70 N 9.3
 { "v": 1, "model": "ifs025", "run": 1795435200, "made": 1795470640,
   "t": [1795186800, 1795197600],
   "zones": { "<place id>": { "rain": [0.2, 0], "et0": [0.05, 0.1], "temp": [14.1, 15.0],
-                             "rh": [81, 77], "wind": [12.3, 9.8], "cloud": [90, 40] } } }
+                             "rh": [81, 77], "wind": [12.3, 9.8], "cloud": [90, 40], "p": [null, 64] } } }
 ```
 
 - `run`: start of the model run; `made`: when the tile was built (both unix seconds).
@@ -58,6 +70,8 @@ One tile per 1° square, named `<floor(lat)>_<floor(lon)>` (Cascais, 38.70 N 9.3
 - `rain`, `et0`: mm inside the step. `temp` °C, `rh` %, `wind` km/h (10 m), `cloud` %: the state at the
   end of the step. Every array is as long as `t`; a missing value is `null` (for example the oldest
   hours when an earlier run is no longer served).
+- `p` (optional): rain chance in the step, %, from the ENS; only for the steps after the run (`null`
+  before, and where it is not known). Absent when the run was built without the ENS.
 - Past steps come from the run that started 3 or 6 hours before them. At the run time itself the state
   is the new run's analysis (step 0).
 
@@ -116,7 +130,9 @@ docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -c \
 
 Options: `--check` (only say whether there is work, no download), `--cells` (also compare the list of
 places of a target that already holds the run), `--force` (upload even when the target holds the run),
-`--run YYYYMMDDHH` (a given run instead of the newest).
+`--run YYYYMMDDHH` (a given run instead of the newest), `--no-ens` (leave the rain chance out: no wait
+for the ENS, no download). `python scripts/measure_ens.py POINTS.json [--om N]` measures the ENS part
+alone (bytes, requests, seconds) and compares its chance with Open-Meteo's at N places.
 
 ## Settings (environment)
 
@@ -157,7 +173,7 @@ that.
 
 ## Data source and licence
 
-Weather data: **ECMWF open data**, IFS high-resolution forecast at 0.25°
+Weather data: **ECMWF open data**, IFS high-resolution forecast and ensemble (ENS) at 0.25°
 (<https://www.ecmwf.int/en/forecasts/datasets/open-data>), read from <https://data.ecmwf.int/forecasts/>
 and from its mirrors on AWS (`s3://ecmwf-forecasts`) and Google Cloud (`gs://ecmwf-open-data`). It is
 published under the Creative Commons Attribution 4.0 International licence (CC BY 4.0,

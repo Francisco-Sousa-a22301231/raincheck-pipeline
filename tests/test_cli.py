@@ -28,7 +28,7 @@ def asked(monkeypatch):
     for name, value in ENV.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    monkeypatch.setattr(ecmwf, "latest_run", lambda now: RUN)
+    monkeypatch.setattr(cli, "newest_run", lambda now, with_ens=True: (RUN, True))
     monkeypatch.setattr(targets, "get_status", get_status)
     monkeypatch.setattr(targets, "get_cells", get_cells)
     monkeypatch.setattr(cli, "extract", lambda *a, **k: pytest.fail("nothing may be downloaded here"))

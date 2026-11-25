@@ -160,6 +160,19 @@ def point_series(run: int, lat: float, lon: float, get: Getter, cloud_scale: flo
     }
 
 
+def chance_on_timeline(run: int, per_step: dict[int, float | None]) -> list[int | None]:
+    """The ENS rain chance (`per_step[step]`, %, step = hours after the run) over `timeline(run)`.
+
+    Only the steps after the run have one (it comes from the new run's members); the past and any step
+    without a value are null: the server then uses its own estimate for those.
+    """
+    out: list[int | None] = []
+    for t in timeline(run):
+        v = per_step.get((t - run) // HOUR) if t > run else None
+        out.append(None if v is None or not math.isfinite(v) else int(round(min(100.0, max(0.0, v)))))
+    return out
+
+
 def build_tiles(cells: list[dict], series: list[dict[str, list]], run: int, made: int) -> dict[str, dict]:
     """Groups the points' series into 1-degree tiles: `{ key: tile }`. `series[i]` belongs to `cells[i]`."""
     times = timeline(run)

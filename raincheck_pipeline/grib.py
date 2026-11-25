@@ -109,6 +109,11 @@ class Sampler:
         self.cloud_scale: float | None = None  # 1 when tcc is in %, 100 when it is 0..1
         self.grid: Grid | None = None
 
+    @property
+    def size(self) -> int:
+        """How many points are read."""
+        return len(self._points)
+
     def set_land_mask(self, message: bytes) -> None:
         """The land-sea mask of the model (`lsm`): from now on places on a coast read the land side."""
         import eccodes

@@ -64,6 +64,27 @@ def land_index(grid: Grid, lat: float, lon: float, is_land: Callable[[int], bool
     return best[1] if best else nearest_index(grid, lat, lon)
 
 
+def contains(grid: Grid, lat: float, lon: float) -> bool:
+    """Whether a place is inside the grid (with half a grid step around its edge).
+
+    Only matters for regional grids (ICON-EU): `nearest_index` clamps a place outside them to the edge,
+    which would hand a place in Brazil the rain of the Azores. A global grid contains everything.
+    """
+    if grid.north_to_south:
+        south, north = grid.lat_first - (grid.nj - 1) * grid.d_lat, grid.lat_first
+    else:
+        south, north = grid.lat_first, grid.lat_first + (grid.nj - 1) * grid.d_lat
+    if not south - grid.d_lat / 2 <= lat <= north + grid.d_lat / 2:
+        return False
+    if abs(grid.ni * grid.d_lon - 360.0) < 1e-6:
+        return True
+    east = (lon - grid.lon_first) % 360.0 if grid.west_to_east else (grid.lon_first - lon) % 360.0
+    span = (grid.ni - 1) * grid.d_lon
+    # East of the last column by up to half a step, or west of the first by up to half a step (which
+    # the modulo turns into "almost 360 degrees east").
+    return east <= span + grid.d_lon / 2 or east >= 360.0 - grid.d_lon / 2
+
+
 def point_of(grid: Grid, idx: int) -> tuple[float, float]:
     """The coordinates of a grid point from its index (longitude in -180..180)."""
     j, i = divmod(idx, grid.ni)
@@ -108,6 +129,7 @@ class Sampler:
         self._land: tuple[Grid, object] | None = None
         self.cloud_scale: float | None = None  # 1 when tcc is in %, 100 when it is 0..1
         self.grid: Grid | None = None
+        self.units: dict[str, str] = {}  # short name -> GRIB units, as read (tp: "m" for IFS, "kg m**-2" elsewhere)
 
     @property
     def size(self) -> int:
@@ -146,8 +168,9 @@ class Sampler:
         try:
             grid = _grid_of(eccodes, gid)
             name = eccodes.codes_get(gid, "shortName")
+            self.units[name] = str(eccodes.codes_get(gid, "units"))
             if name == "tcc" and self.cloud_scale is None:
-                self.cloud_scale = 1.0 if "%" in str(eccodes.codes_get(gid, "units")) else 100.0
+                self.cloud_scale = 1.0 if "%" in self.units[name] else 100.0
             missing = eccodes.codes_get(gid, "missingValue")
             has_bitmap = eccodes.codes_get(gid, "bitmapPresent") == 1
             values = eccodes.codes_get_values(gid)

@@ -1,5 +1,8 @@
 [
   { "id": "geracoes", "lat": 38.6982, "lon": -9.3812 },
+  { "id": "cascais", "lat": 38.70, "lon": -9.38 },
+  { "id": "boardriders-ericeira", "lat": 38.976, "lon": -9.418 },
+  { "id": "porto", "lat": 41.1496, "lon": -8.6110 },
   { "id": "venice-beach", "lat": 33.9850, "lon": -118.4695 },
   { "id": "sao-paulo", "lat": -23.5505, "lon": -46.6333 },
   { "id": "tokyo", "lat": 35.6762, "lon": 139.6503 },

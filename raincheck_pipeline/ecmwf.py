@@ -37,9 +37,10 @@ def source_order() -> list[str]:
     return [SOURCES.get(n, n).rstrip("/") for n in names]
 
 
-def file_path(run: int, step: int, stream: str, ext: str) -> str:
+def file_path(run: int, step: int, stream: str, ext: str, model: str = "ifs") -> str:
+    """`model` is the folder of the forecast system: "ifs" (the base layer) or "aifs-single" (rain models)."""
     d = datetime.fromtimestamp(run, tz=timezone.utc)
-    return f"{d:%Y%m%d}/{d:%H}z/ifs/0p25/{stream}/{d:%Y%m%d%H}0000-{step}h-{stream}-fc.{ext}"
+    return f"{d:%Y%m%d}/{d:%H}z/{model}/0p25/{stream}/{d:%Y%m%d%H}0000-{step}h-{stream}-fc.{ext}"
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,8 @@ class SourceTrouble(OSError):
 
 
 def step_fields(
-    run: int, step: int, sources: list[str] | None = None, ask_all: bool = True, params: tuple[str, ...] = PARAMS
+    run: int, step: int, sources: list[str] | None = None, ask_all: bool = True, params: tuple[str, ...] = PARAMS,
+    model: str = "ifs", streams: tuple[str, ...] = STREAMS,
 ) -> dict[str, Field] | None:
     """Where the needed fields of one step are, from the first source that has the step.
 
@@ -78,14 +80,15 @@ def step_fields(
     knows whether the step exists, and that raises SourceTrouble instead of passing for "not there"
     (a step taken for gone is uploaded as empty hours). With `ask_all` off, the first source that
     answers "not there" settles it (right for a run that may not be out yet; wrong for old runs, which
-    the origin drops first).
+    the origin drops first). `model` and `streams` pick another forecast system with the same layout
+    (AIFS: "aifs-single", only in `oper`).
     """
     bases = sources or source_order()
     said_no = False
     for base in bases:
         missing = 0
-        for stream in STREAMS:
-            url = f"{base}/{file_path(run, step, stream, 'index')}"
+        for stream in streams:
+            url = f"{base}/{file_path(run, step, stream, 'index', model)}"
             try:
                 _, body = request(url)
             except HttpError as err:
@@ -98,8 +101,8 @@ def step_fields(
                 print(f"  warning: {base} could not be reached ({err})", flush=True)
                 break
             order = (base, *[b for b in bases if b != base])
-            return parse_index(body.decode("utf-8"), file_path(run, step, stream, "grib2"), order, params)
-        if missing == len(STREAMS):
+            return parse_index(body.decode("utf-8"), file_path(run, step, stream, "grib2", model), order, params)
+        if missing == len(streams):
             said_no = True
             if not ask_all:
                 return None

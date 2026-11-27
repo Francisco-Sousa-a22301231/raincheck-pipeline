@@ -1,8 +1,9 @@
 name: Rain models
 
 # Every 30 minutes: has any of GFS, GEFS, ICON-EU or AIFS a newer run than a target holds? Almost always
-# not, and the job ends after the check (standard library only, no install): a few dozen HEAD requests
-# to NOAA, DWD and ECMWF and one to each target's rain status, which costs the target no database read.
+# not, and the job ends after the check (standard library only, no install): about 100 small requests
+# (mostly HEAD, about 10 s: every step a model needs is checked) to NOAA, DWD and ECMWF and one to each
+# target's rain status, which costs the target no database read.
 # Each model is out at its own time after its run (ICON-EU about 3.3 h, GFS 4.1 h, GEFS 4.4 h, AIFS
 # 6.1 h), so a 6-hour cycle can give up to four builds; each downloads about 260 MB (GEFS is most of it)
 # and takes a few minutes. Once an hour the check also compares each target's list of places.

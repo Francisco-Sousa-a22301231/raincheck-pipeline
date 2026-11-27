@@ -104,10 +104,15 @@ def get_cells(target: Target) -> list[dict]:
     return cells
 
 
-def get_status(target: Target) -> dict:
-    """What the server holds: {"run": <unix s or None>, "cells": <signature or None>, ...}."""
+BASE_STATUS = "/api/admin/base/status"
+RAIN_STATUS = "/api/admin/rain/status"
+
+
+def get_status(target: Target, path: str = BASE_STATUS) -> dict:
+    """What the server holds. Base layer: {"run": <unix s or None>, "cells": <signature or None>, ...};
+    rain models (`path=RAIN_STATUS`): {"made", "cells", "models": {<model>: <run>}, ...}."""
     _, body = request(
-        f"{target.url}/api/admin/base/status",
+        f"{target.url}{path}",
         user_agent=USER_AGENT,
         headers={"Authorization": f"Bearer {target.token}", "Accept": "application/json"},
     )
@@ -144,12 +149,32 @@ def upload(target: Target, tiles: dict[str, dict], run: int, signature: str, max
 
     Raises on any answer that is not 2xx (after retries). Returns the number of requests made.
     """
+    return put_batches(target, "/api/admin/base", tiles, {"run": run, "cells": signature}, max_tiles, max_bytes)
+
+
+def upload_rain(target: Target, tiles: dict[str, dict], signature: str, models: dict[str, int],
+                max_tiles: int, max_bytes: int) -> int:
+    """The rain-model tiles (docs/RAIN-TILES.md in the Worker's repository), batched like the base layer's.
+
+    Besides `tiles` and `last` (the contract), every batch says which list of places it was built for
+    (`cells`, as the base layer does) and which run of each model it holds (`models`): the server can
+    write both into its status without opening a tile, and ignores them if it does not need them.
+    """
+    return put_batches(target, "/api/admin/rain", tiles, {"cells": signature, "models": models}, max_tiles, max_bytes)
+
+
+def put_batches(target: Target, path: str, tiles: dict[str, dict], extra: dict, max_tiles: int, max_bytes: int) -> int:
+    """PUTs `{**extra, "last": ..., "tiles": {...}}` in batches; `last` is true on the final one only.
+
+    With no tile at all one empty batch still goes out, marked last, so the server records the upload.
+    Raises on any answer that is not 2xx (after retries). Returns the number of requests made.
+    """
     parts = list(batches(tiles, max_tiles=max_tiles, max_bytes=max_bytes)) or [{}]
     for i, part in enumerate(parts):
-        body = encode({"run": run, "cells": signature, "last": i == len(parts) - 1, "tiles": part})
+        body = encode({**extra, "last": i == len(parts) - 1, "tiles": part})
         try:
             request(
-                f"{target.url}/api/admin/base",
+                f"{target.url}{path}",
                 method="PUT",
                 data=body,
                 user_agent=USER_AGENT,

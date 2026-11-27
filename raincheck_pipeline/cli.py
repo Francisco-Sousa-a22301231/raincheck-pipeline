@@ -156,7 +156,14 @@ def series_for(run: int, cells: list[dict], values: dict, where: dict[tuple[floa
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="raincheck_pipeline", description=__doc__)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["rain"]:
+        # The rain-model job (GFS, GEFS, ICON-EU, AIFS): its own flow and options, see rain.py.
+        from . import rain
+
+        return rain.main(argv[1:])
+    ap = argparse.ArgumentParser(prog="raincheck_pipeline", description=__doc__,
+                                 epilog="`python -m raincheck_pipeline rain --help`: the rain-model job.")
     ap.add_argument("--check", action="store_true", help="only say whether any target needs the newest run (no download)")
     ap.add_argument("--cells", action="store_true",
                     help="also compare the list of points of a target that already holds the run (the server reads "

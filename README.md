@@ -4,6 +4,10 @@ Builds the free, world-wide weather **base layer** of [Rain Check](https://rainc
 per place (rain, evaporation, temperature, humidity, wind, cloud) for the past 72 hours and the next
 72 hours, taken from the ECMWF IFS open-data forecast and packed into small JSON tiles.
 
+A second job builds the **rain models** layer: the rain amount of NOAA GFS, DWD ICON-EU and ECMWF AIFS
+and the rain chance and median of the NOAA GEFS ensemble, per place, for the next 72 hours (see
+"Rain models" below).
+
 It is an extractor and nothing else: it asks a Rain Check server which places it wants, downloads only
 the model fields it needs, and uploads the tiles. It runs on GitHub Actions and keeps no state: every
 run rebuilds everything from ECMWF.
@@ -156,6 +160,8 @@ that.
 
 ## Limits
 
+(Of the base layer; the rain models' are in "Rain models" below.)
+
 - **Resolution:** 0.25° (about 28 km) and 3-hour steps: showers and sea breezes are smoothed, places in
   the same grid box get the same numbers, and mountains and valleys are not told apart (no correction
   for altitude).
@@ -170,6 +176,81 @@ that.
 - **New places** appear within the hour or so after the server lists them (their list has a
   fingerprint, compared once an hour: a change rebuilds the tiles even for the same run), and at the
   next run in any case.
+
+## Rain models (`rain/v1`)
+
+`python -m raincheck_pipeline rain` (`raincheck_pipeline/rain.py`, workflow `rain-models.yml`) adds four
+more models to the base layer's ECMWF IFS and ENS, so every place gets several opinions on rain without
+any Open-Meteo call. The contract with the Worker is `docs/RAIN-TILES.md` in its repository.
+
+| Model | What | Source | Per run (measured 27/11/2026) | Out after the run |
+|---|---|---|---|---|
+| `gfs` | NOAA GFS 0.25°, deterministic | `noaa-gfs-bdp-pds` on AWS: the APCP record of each step, by range request after its `.idx` | about 15 MB, 52 requests | about 4.1 h |
+| `gefs` | NOAA GEFS 0.25°, 31 members | `noaa-gefs-pds` on AWS (`pgrb2sp25`), the same way per member | about 220 MB, 1,550 requests | about 4.4 h |
+| `icon_eu` | DWD ICON-EU 0.0625°, Europe only | `opendata.dwd.de`: whole bzip2 files of `TOT_PREC`, one per step | about 17 MB, 26 requests | about 3.3 h |
+| `aifs` | ECMWF AIFS single 0.25° (machine-learned), 6-hourly | ECMWF open data (portal, AWS, Google Cloud), `tp` by range request | about 6 MB, 30 requests | about 6.1 h |
+
+How it works:
+
+1. **Timeline.** 24 three-hour steps: the end of the step the job starts in (`made`), then every 3 h.
+   Each model fills it from its own newest run, so the same step is step 15 of a GFS 00 UTC run and
+   step 9 of an ICON-EU 06 UTC run. Only the forecast steps the timeline needs are fetched (a run a few
+   hours old needs steps up to about 80 h, not just 72).
+2. **Newest run, model by model.** The newest 00/06/12/18 UTC run whose every needed step is published
+   (HEAD requests, the last step first: NOAA does not publish steps strictly in order; on 27/11/2026 at
+   run + 4 h GFS had f075 but not f060), else the run before (up to 18 h back). A model whose server
+   cannot be asked is left out of the job.
+3. **Who needs it.** Each target's `GET /api/admin/rain/status` says which run of each model it holds
+   (`models`). A target gets a build when any model has a newer run (each model comes out at its own
+   time, so a 6-hour cycle can give up to four builds), or, with `--cells`, when its list of places
+   changed. Only then is `GET /api/cells` read.
+4. **Download and sample**, model by model, `DOWNLOAD_THREADS` at a time, each field read at the places
+   and dropped at once (at most two downloads per thread wait to be decoded). Each place reads one grid
+   point per model: the nearest land point as in the base layer (GFS's `LAND` field of step 0, also used
+   for GEFS; ICON-EU's own land fraction `FR_LAND`; AIFS's `lsm`). GFS's longitudes run 0 to 360 E,
+   ECMWF's from 180 W, ICON-EU's from 336.5 E: the grid code works on any of them.
+5. **Amounts.** Accumulations become amounts per 3-hour step: GFS and ICON-EU totals since the run's
+   start (`total(L) - total(L-3)`); GEFS buckets that start again every 6 hours (at 3, 9, 15... h the
+   bucket is the step; at 6, 12, 18... h the bucket of the step before comes off); AIFS totals every
+   6 hours, each 6-hour amount split evenly over its two 3-hour steps. GRIB packing leaves small negative
+   differences (down to -0.09 mm in GEFS): clipped at 0. `gefs_p` is the share of the members with at
+   least 0.3 mm in the step (the ENS rule), whole %; `gefs_mm` their median; both null where fewer than
+   25 members are known.
+6. **Failures.** A deterministic model with a step missing or a download that fails is left out of the
+   tiles (logged); a GEFS member that fails is left out, GEFS itself when fewer than 25 members remain.
+   The other models still go out. When no model could be read nothing is uploaded.
+7. **Upload** to `PUT /api/admin/rain` in batches (at most 60 tiles and about 128 KB), `last: true` on the
+   final one. Every batch also carries `cells` (the list fingerprint, as for the base layer) and `models`
+   (`{ <model>: <run> }`).
+
+Tile (`rain/v1/<floor(lat)>_<floor(lon)>.json`):
+
+```json
+{ "v": 1, "made": 1795773398, "t": [1795780800, 1795791600],
+  "models": { "gfs": { "run": 1795737600 }, "gefs": { "run": 1795737600, "members": 31 },
+              "icon_eu": { "run": 1795759200 }, "aifs": { "run": 1795737600 } },
+  "zones": { "<place id>": { "gfs": [0.2, 0], "icon_eu": [0.1, 0], "aifs": [0.2, 0.1],
+                             "gefs_p": [10, 26], "gefs_mm": [0, 0.1] } } }
+```
+
+Amounts in mm in the step (0.1 mm), `null` where the model's run doesn't cover the step; `icon_eu` is
+absent for places outside its domain (29.5 to 70.5 N, 23.5 W to 62.5 E); a model left out is absent from
+`models` and from every zone.
+
+```bash
+python -m raincheck_pipeline rain --dry-run --points-file points.example.json --out out-rain
+python scripts/compare_rain_open_meteo.py points.example.json out-rain 4   # against Open-Meteo's copies
+```
+
+Limits: one grid point per model, no interpolation (ICON-EU's is about 7 km, the others about 28 km);
+AIFS says nothing about how rain falls inside its 6 hours (halved); the job keeps no state, so every
+build downloads every model again (about 260 MB, GEFS most of it), up to four times a cycle as the
+models come out; a model's run is held until its next one is complete, so a model that is late keeps
+its previous run (and a tile older than 36 h is ignored by the Worker).
+
+Options: `--check`, `--cells`, `--force` as for the base layer, `--models gfs,icon_eu` (only those). The
+workflow runs at :26 (with `--cells`) and :56 every hour, uses the same variables and secrets as the base
+layer, and never runs twice at once.
 
 ## Data source and licence
 
@@ -189,3 +270,15 @@ job uses 8.
 
 The data was modified: see "How it works". A site that shows numbers from these tiles has to carry the
 same attribution.
+
+The rain-models job (above) also reads:
+
+- **ECMWF AIFS single** open data (<https://data.ecmwf.int/forecasts/>, `aifs-single`): the same ECMWF
+  terms and CC BY 4.0 attribution as above.
+- **NOAA GFS and GEFS**, from the NOAA Open Data Dissemination program on AWS
+  (`s3://noaa-gfs-bdp-pds`, `s3://noaa-gefs-pds`). Data of the US National Weather Service is in the
+  public domain; credited as a courtesy: "Source: NOAA / National Centers for Environmental Prediction
+  (NCEP)". NOAA does not endorse this product.
+- **DWD ICON-EU**, from the open-data server of Deutscher Wetterdienst (<https://opendata.dwd.de/>),
+  under CC BY 4.0. Attribution: "Source: Deutscher Wetterdienst" (the data was modified: sampled at
+  places, accumulations turned into 3-hour amounts).
